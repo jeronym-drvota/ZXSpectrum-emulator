@@ -1,0 +1,19 @@
+{
+  "profiles": {
+    "ZxSpectrum": {
+      "commandName": "Project",
+      "commandLineArgs": "C:\\PROGRAMY\\ZXSpectrumEmulator\\ZxSpectrum\\roms\\48.rom"
+    },
+    "Didaktik Gama": {
+      "commandName": "Project",
+      "commandLineArgs": "C:\\PROGRAMY\\ZXSpectrumEmulator\\ZxSpectrum\\roms\\Didaktik_Gama_1987.rom"
+    },
+    "Didaktik M": {
+      "commandName": "Project",
+      "commandLineArgs": "C:\\PROGRAMY\\ZXSpectrumEmulator\\ZxSpectrum\\roms\\Didaktik_M_1990.rom"
+    },
+    "Profile 1": {
+      "commandName": "Executable"
+    }
+  }
+}
