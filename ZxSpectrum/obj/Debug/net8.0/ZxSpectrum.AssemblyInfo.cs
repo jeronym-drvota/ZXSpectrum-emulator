@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("ZxSpectrum")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+df88f68f0b36b1601baa5d686a0a563d61da371d")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+5c5bbab7ec7f647239df110f61af541c5644370b")]
 [assembly: System.Reflection.AssemblyProductAttribute("ZxSpectrum")]
 [assembly: System.Reflection.AssemblyTitleAttribute("ZxSpectrum")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
