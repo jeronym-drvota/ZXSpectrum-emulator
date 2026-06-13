@@ -99,6 +99,7 @@ namespace ZxSpectrum
             "  Home       uložit snapshot (Dokumenty\\snapshots)\n" +
             "  End        nahrát snapshot (výběr šipkami)\n" +
             "  PrintScreen uložit obrazovku jako nahrávací GIF\n" +
+            "  Pause      pozastavit / spustit emulátor\n" +
             "\n" +
             "  Num +  /  Num -    rychleji / pomaleji\n" +
             "  Num *              rychlost 100 %";
@@ -116,6 +117,7 @@ namespace ZxSpectrum
         double tStateBudget;   // kolik T-stavů zbývá odběhnout
         double speed = 1.0;    // násobič rychlosti emulace
         bool unlimited;        // běh na maximum (bez limitu reálného času)
+        bool paused;           // emulátor pozastaven (stroj stojí, obraz se drží)
 
         public MainWindow(string[] args)
         {
@@ -716,6 +718,17 @@ namespace ZxSpectrum
                 return;
             }
 
+            if (paused) // pozastaveno – stroj neběží, jen držíme obraz
+            {
+                lastTime = clock.Elapsed.TotalSeconds;
+                tStateBudget = 0;
+                Ula.Render(spectrum.ScreenBank, spectrum.Border, spectrum.FlashOn, pixels);
+                using (var fb = bitmap.Lock())
+                    Marshal.Copy(pixels, 0, fb.Address, pixels.Length);
+                image.InvalidateVisual();
+                return;
+            }
+
             bool turbo = unlimited || (fastTape && (spectrum.TapePlaying || AutoActive));
 
             if (turbo)
@@ -1248,6 +1261,16 @@ namespace ZxSpectrum
             }
             if (e.Key == Key.PrintScreen) // GIF – akce až na KeyUp (PrintScreen na Windows často nedá KeyDown)
             {
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.Pause) // pozastavit / spustit emulátor
+            {
+                paused = !paused;
+                if (paused) ClearKeys(); // pustit držené klávesy, ať se „nezaseknou"
+                Title = paused
+                    ? $"ZX Spectrum {(is128 ? "128K" : "48K")} – POZASTAVENO (Pause spustí)"
+                    : $"ZX Spectrum {(is128 ? "128K" : "48K")} – běží";
                 e.Handled = true;
                 return;
             }

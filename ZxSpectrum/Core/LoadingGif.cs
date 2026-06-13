@@ -151,10 +151,7 @@ namespace ZxSpectrum.Core
             Le16(o, w); Le16(o, h);
             o.Add(0xF0 | 3); o.Add(0); o.Add(0);         // globální tabulka barev, velikost 3 → 16
             for (int i = 0; i < 16; i++) { o.Add(Pal[i][0]); o.Add(Pal[i][1]); o.Add(Pal[i][2]); }
-            // NETSCAPE2.0 – nekonečná smyčka
-            o.AddRange(new byte[] { 0x21, 0xFF, 0x0B });
-            o.AddRange(System.Text.Encoding.ASCII.GetBytes("NETSCAPE2.0"));
-            o.AddRange(new byte[] { 0x03, 0x01, 0, 0, 0x00 });
+            // Bez NETSCAPE2.0 smyčky → animace proběhne jen jednou a zůstane na posledním snímku.
 
             for (int f = 0; f < frames.Count; f++)
             {

@@ -74,6 +74,7 @@ ZxSpectrum/
 - **Home** – uložit snapshot (.z80) do Dokumenty\snapshots (název hry + datum/čas)
 - **End** – nahrát snapshot (výběrový overlay, šipky + Enter)
 - **PrintScreen** – uložit obrazovku jako „nahrávací" animovaný GIF do Dokumenty\screenshots (akce na KeyUp)
+- **Pause** – pozastavit / spustit emulátor (stroj stojí, obraz se drží)
 - **Num + / − / *** – rychleji / pomaleji / 100 %
 - Kempston: **šipky + Space (fire)**
 

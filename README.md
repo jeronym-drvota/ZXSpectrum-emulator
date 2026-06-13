@@ -73,6 +73,7 @@ Soubor lze otevřít klávesou **F3**, přetažením do okna, nebo argumentem na
 | **Home** | uložit snapshot (nový soubor do `Dokumenty\snapshots`) |
 | **End** | nahrát snapshot (výběr ze seznamu šipkami) |
 | **PrintScreen** | uložit obrazovku jako „nahrávací" animovaný GIF |
+| **Pause** | pozastavit / spustit emulátor |
 | **Num + / − / ∗** | rychleji / pomaleji / 100 % |
 
 ### Klávesnice
