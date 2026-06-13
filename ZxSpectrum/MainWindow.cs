@@ -44,6 +44,29 @@ namespace ZxSpectrum
         List<WebGames.Entry> webResults;
         static readonly string DownloadDir = Path.Combine(AppContext.BaseDirectory, "downloads");
 
+        // snapshoty: ukládání do Dokumenty\snapshots (vždy nový soubor), výběrové nahrávání
+        static readonly string SnapshotDir =
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "snapshots");
+        // „nahrávací" GIF aktuální obrazovky
+        static readonly string ScreenshotDir =
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "screenshots");
+        string currentGameName = "Spectrum";   // základ názvu ukládaného snapshotu
+
+        // overlay výběru snapshotu k nahrání (End)
+        readonly Border snapOverlay;
+        readonly TextBlock snapText;
+        bool snapMenuActive;
+        List<string> snapFiles = new();
+        int snapIndex;
+
+        // vkládání POKE (cheaty) – klávesa Insert
+        readonly Border pokeOverlay;
+        readonly TextBlock pokeText;
+        bool pokeMenuActive;
+        string pokeInput = "";
+        string pokeStatus;                                  // potvrzení / chyba poslední operace
+        readonly List<(ushort addr, byte val)> appliedPokes = new(); // historie pro výpis
+
         // automatické vkládání kláves (autostart pásky: LOAD "" / Tape Loader)
         // položka: keys = stisknout na 'frames' snímků; keys == null = jen čekat
         readonly Queue<((int row, int bit)[] keys, int frames)> autoSeq = new();
@@ -71,6 +94,11 @@ namespace ZxSpectrum
             "  F10        reset\n" +
             "  F11        mapa kláves ZX Spectrum\n" +
             "  F12        fullscreen  (též Alt+Enter, Esc = ven)\n" +
+            "\n" +
+            "  Insert     vložit POKE (cheat: adresa,hodnota)\n" +
+            "  Home       uložit snapshot (Dokumenty\\snapshots)\n" +
+            "  End        nahrát snapshot (výběr šipkami)\n" +
+            "  PrintScreen uložit obrazovku jako nahrávací GIF\n" +
             "\n" +
             "  Num +  /  Num -    rychleji / pomaleji\n" +
             "  Num *              rychlost 100 %";
@@ -118,8 +146,22 @@ namespace ZxSpectrum
                 FontSize = 14
             };
             webOverlay = MakeOverlayBox(webText);
+            pokeText = new TextBlock
+            {
+                Foreground = Brushes.White,
+                FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+                FontSize = 14
+            };
+            pokeOverlay = MakeOverlayBox(pokeText);
+            snapText = new TextBlock
+            {
+                Foreground = Brushes.White,
+                FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+                FontSize = 14
+            };
+            snapOverlay = MakeOverlayBox(snapText);
 
-            Content = new Panel { Children = { image, helpOverlay, kbOverlay, romOverlay, webOverlay } };
+            Content = new Panel { Children = { image, helpOverlay, kbOverlay, romOverlay, webOverlay, pokeOverlay, snapOverlay } };
             Focusable = true;
 
             timer = new DispatcherTimer(DispatcherPriority.Render)
@@ -218,10 +260,12 @@ namespace ZxSpectrum
         static string FindSnapshotArg(string[] args) =>
             args.FirstOrDefault(a => IsLoadable(a) && File.Exists(a));
 
-        void LoadSnapshotFile(string path)
+        void LoadSnapshotFile(string path, bool updateGameName = true)
         {
             if (romMenuActive) SelectRom(-1); // přetažení souboru zavře menu ROM
             AutoClear(); // ruční načtení ruší rozjetý autostart pásky
+            // u nahrání ze složky snapshotů necháme název hry, aby se nezřetězil s časem
+            if (updateGameName) currentGameName = Path.GetFileNameWithoutExtension(path);
 
             try
             {
@@ -251,6 +295,142 @@ namespace ZxSpectrum
             {
                 Title = $"ZX Spectrum – chyba načtení: {ex.Message}";
             }
+        } 
+
+        // ---------- ukládání / nahrávání snapshotů ----------
+        /// <summary>Uloží stav jako nový .z80 do Dokumenty\snapshots (název hry + datum/čas).</summary>
+        void SaveSnapshot()
+        {
+            try
+            {
+                Directory.CreateDirectory(SnapshotDir);
+                string stamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
+                string file = $"{SanitizeFileName(currentGameName)}_{stamp}.z80";
+                Snapshot.SaveZ80(spectrum, Path.Combine(SnapshotDir, file));
+                Title = $"ZX Spectrum {(is128 ? "128K" : "48K")} – uloženo: {file}";
+            }
+            catch (Exception ex)
+            {
+                Title = $"ZX Spectrum – chyba uložení: {ex.Message}";
+            }
+        }
+
+        /// <summary>Z názvu hry vyrobí platný název souboru (nahradí zakázané znaky).</summary>
+        static string SanitizeFileName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return "Spectrum";
+            foreach (char ch in Path.GetInvalidFileNameChars()) name = name.Replace(ch, '_');
+            name = name.Trim();
+            return name.Length == 0 ? "Spectrum" : name;
+        }
+
+        /// <summary>Uloží aktuální obrazovku jako animovaný GIF imitující nahrávání z pásky.</summary>
+        void SaveLoadingGif()
+        {
+            try
+            {
+                Directory.CreateDirectory(ScreenshotDir);
+                // zkopírovat obsah obrazové banky (pixely + atributy), ať generujeme z konzistentního stavu
+                var snap = new byte[6912];
+                Array.Copy(spectrum.ScreenBank, snap, 6912);
+                byte border = spectrum.Border;
+
+                string file = $"{SanitizeFileName(currentGameName)}_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.gif";
+                string full = Path.Combine(ScreenshotDir, file);
+                Title = $"ZX Spectrum – generuji GIF {file}…";
+
+                // generování běží na pozadí (neblokuje smyčku snímků)
+                System.Threading.Tasks.Task.Run(() =>
+                {
+                    try
+                    {
+                        LoadingGif.Save(snap, border, full);
+                        Dispatcher.UIThread.Post(() =>
+                            Title = $"ZX Spectrum {(is128 ? "128K" : "48K")} – uložen GIF: {file}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Dispatcher.UIThread.Post(() => Title = $"ZX Spectrum – chyba GIF: {ex.Message}");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Title = $"ZX Spectrum – chyba GIF: {ex.Message}";
+            }
+        }
+
+        void OpenSnapLoad()
+        {
+            helpOverlay.IsVisible = kbOverlay.IsVisible = false;
+            ClearKeys();
+            try
+            {
+                snapFiles = Directory.Exists(SnapshotDir)
+                    ? Directory.GetFiles(SnapshotDir)
+                        .Where(f =>
+                        {
+                            var e = Path.GetExtension(f).ToLowerInvariant();
+                            return e == ".z80" || e == ".sna";
+                        })
+                        .OrderByDescending(File.GetLastWriteTime)
+                        .ToList()
+                    : new List<string>();
+            }
+            catch { snapFiles = new List<string>(); }
+
+            snapIndex = 0;
+            snapMenuActive = true;
+            snapOverlay.IsVisible = true;
+            UpdateSnapOverlay();
+        }
+
+        void CloseSnapLoad()
+        {
+            snapMenuActive = false;
+            snapOverlay.IsVisible = false;
+        }
+
+        void UpdateSnapOverlay()
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append("NAHRÁT SNAPSHOT   (↑↓ výběr, Enter nahraje, Esc zavře)\n");
+            sb.Append($"  aktuální hra: {currentGameName}\n\n");
+
+            if (snapFiles.Count == 0)
+            {
+                sb.Append("  Žádné snapshoty. Ulož klávesou Home do:\n");
+                sb.Append($"  {SnapshotDir}");
+                snapText.Text = sb.ToString();
+                return;
+            }
+
+            // posuvné okno se zvýrazněnou položkou
+            const int window = 14;
+            int from = Math.Max(0, Math.Min(snapIndex - window / 2, snapFiles.Count - window));
+            int to = Math.Min(snapFiles.Count, from + window);
+            if (from > 0) sb.Append("    ⋮\n");
+            for (int i = from; i < to; i++)
+            {
+                string name = Path.GetFileName(snapFiles[i]);
+                if (name.Length > 50) name = name[..49] + "…";
+                string when = File.GetLastWriteTime(snapFiles[i]).ToString("yyyy-MM-dd HH:mm");
+                sb.Append(i == snapIndex ? "  ► " : "    ");
+                sb.Append($"{name,-51} {when}\n");
+            }
+            if (to < snapFiles.Count) sb.Append("    ⋮");
+            snapText.Text = sb.ToString();
+        }
+
+        void LoadSelectedSnap()
+        {
+            if (snapFiles.Count == 0) { CloseSnapLoad(); return; }
+            string path = snapFiles[snapIndex];
+            CloseSnapLoad();
+            LoadSnapshotFile(path, updateGameName: false); // ponech název aktuální hry
+            // srovnat časování po skoku stavu
+            lastTime = clock.Elapsed.TotalSeconds;
+            tStateBudget = 0;
         }
 
         void LoadRzx(string path)
@@ -723,6 +903,7 @@ namespace ZxSpectrum
         void AutoRunTape(string path)
         {
             BuildMachine(is128); // čistý start (BuildMachine volá AutoClear)
+            currentGameName = Path.GetFileNameWithoutExtension(path);
             spectrum.Rzx = null;
             spectrum.LoadTape(path);
 
@@ -833,6 +1014,7 @@ namespace ZxSpectrum
                 CloseWebSearch();
                 if (IsTape(path)) AutoRunTape(path); // pásku rovnou spustit (bez LOAD "")
                 else LoadSnapshotFile(path);
+                currentGameName = entry.Title; // pěkný název hry pro snapshoty
             }
             catch (Exception ex)
             {
@@ -840,6 +1022,78 @@ namespace ZxSpectrum
                 webStatus = "Chyba stažení: " + ex.Message;
                 if (webMenuActive) UpdateWebOverlay();
             }
+        }
+
+        // ---------- vkládání POKE (cheaty) – Insert ----------
+        void OpenPoke()
+        {
+            helpOverlay.IsVisible = kbOverlay.IsVisible = false;
+            ClearKeys();           // pustit držené klávesy
+            pokeMenuActive = true;
+            pokeOverlay.IsVisible = true;
+            UpdatePokeOverlay();
+        }
+
+        void ClosePoke()
+        {
+            pokeMenuActive = false;
+            pokeOverlay.IsVisible = false;
+            pokeStatus = null;
+        }
+
+        void UpdatePokeOverlay()
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append("VLOŽIT POKE   (Esc zavře)\n\n");
+            sb.Append("  Zadej: adresa,hodnota   (např. 23693,71)\n");
+            sb.Append("  Enter = aplikovat, Backspace = mazat\n\n");
+            sb.Append($"  POKE {pokeInput}_\n");
+
+            if (appliedPokes.Count > 0)
+            {
+                sb.Append("\n  Použité:\n");
+                int from = Math.Max(0, appliedPokes.Count - 8);
+                for (int i = from; i < appliedPokes.Count; i++)
+                    sb.Append($"    {appliedPokes[i].addr},{appliedPokes[i].val}\n");
+            }
+            if (pokeStatus != null) sb.Append($"\n  {pokeStatus}");
+            pokeText.Text = sb.ToString();
+        }
+
+        /// <summary>Naparsuje "adresa,hodnota" (i s mezerou) a zapíše do paměti.</summary>
+        void ApplyPoke()
+        {
+            string s = pokeInput.Trim();
+            if (s.Length == 0) return;
+
+            // oddělovač čárka, mezera nebo středník
+            var parts = s.Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 2
+                || !int.TryParse(parts[0], out int addr)
+                || !int.TryParse(parts[1], out int val))
+            {
+                pokeStatus = "Chybný formát – zadej adresa,hodnota.";
+                UpdatePokeOverlay();
+                return;
+            }
+            if (addr < 0 || addr > 65535 || val < 0 || val > 255)
+            {
+                pokeStatus = "Mimo rozsah (adresa 0–65535, hodnota 0–255).";
+                UpdatePokeOverlay();
+                return;
+            }
+            if (addr < 16384)
+            {
+                pokeStatus = "Adresa je v ROM (0–16383) – zápis ignorován.";
+                UpdatePokeOverlay();
+                return;
+            }
+
+            spectrum.Poke((ushort)addr, (byte)val);
+            appliedPokes.Add(((ushort)addr, (byte)val));
+            pokeStatus = $"POKE {addr},{val} – hotovo.";
+            pokeInput = "";
+            UpdatePokeOverlay();
         }
 
         // ---------- Kempston joystick ----------
@@ -942,6 +1196,59 @@ namespace ZxSpectrum
                     UpdateWebOverlay();
                     e.Handled = true;
                 }
+                return;
+            }
+            if (pokeMenuActive) // vkládání POKE
+            {
+                // jen konkrétní klávesy nastaví Handled (jinak by se potlačil TextInput)
+                if (e.Key == Key.Escape)
+                {
+                    ClosePoke();
+                    e.Handled = true;
+                }
+                else if (e.Key == Key.Enter)
+                {
+                    ApplyPoke();
+                    e.Handled = true;
+                }
+                else if (e.Key == Key.Back && pokeInput.Length > 0)
+                {
+                    pokeInput = pokeInput[..^1];
+                    UpdatePokeOverlay();
+                    e.Handled = true;
+                }
+                return;
+            }
+            if (snapMenuActive) // výběr snapshotu k nahrání
+            {
+                if (e.Key == Key.Escape) CloseSnapLoad();
+                else if (e.Key == Key.Up) { if (snapIndex > 0) snapIndex--; UpdateSnapOverlay(); }
+                else if (e.Key == Key.Down) { if (snapIndex < snapFiles.Count - 1) snapIndex++; UpdateSnapOverlay(); }
+                else if (e.Key == Key.Enter) LoadSelectedSnap();
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.Insert) // vložit POKE (cheat)
+            {
+                OpenPoke();
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.Home) // uložit snapshot (nový soubor)
+            {
+                SaveSnapshot();
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.End) // nahrát snapshot (výběr šipkami)
+            {
+                OpenSnapLoad();
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.PrintScreen) // GIF – akce až na KeyUp (PrintScreen na Windows často nedá KeyDown)
+            {
+                e.Handled = true;
                 return;
             }
             if (e.Key == Key.F1) // nápověda – ovládání emulátoru
@@ -1107,6 +1414,12 @@ namespace ZxSpectrum
 
         protected override void OnKeyUp(KeyEventArgs e)
         {
+            if (e.Key == Key.PrintScreen) // uložit obrazovku jako „nahrávací" GIF
+            {
+                SaveLoadingGif();
+                e.Handled = true;
+                return;
+            }
             if (joystick && KempstonMap.TryGetValue(e.Key, out int jbit))
             {
                 spectrum.SetJoystick(jbit, false);
@@ -1130,6 +1443,16 @@ namespace ZxSpectrum
                 foreach (char c in e.Text)
                     if (!char.IsControl(c) && webQuery.Length < 40) webQuery += c;
                 UpdateWebOverlay();
+                e.Handled = true;
+                return;
+            }
+            // psaní POKE (povoleny jen číslice, čárka, mezera a středník)
+            if (pokeMenuActive && e.Text != null)
+            {
+                foreach (char c in e.Text)
+                    if ((char.IsDigit(c) || c == ',' || c == ' ' || c == ';') && pokeInput.Length < 16)
+                        pokeInput += c;
+                UpdatePokeOverlay();
                 e.Handled = true;
                 return;
             }

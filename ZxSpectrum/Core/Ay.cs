@@ -50,6 +50,11 @@ namespace ZxSpectrum.Core
         public void Select(int value) => sel = value & 0x0F;
         public byte Read() => (byte)reg[sel];
 
+        /// <summary>Aktuálně vybraný registr (pro uložení snapshotu).</summary>
+        public int Selected => sel;
+        /// <summary>Přečte hodnotu registru bez změny výběru (pro uložení snapshotu).</summary>
+        public byte ReadReg(int i) => (byte)reg[i & 0x0F];
+
         public void Write(int value)
         {
             reg[sel] = value & 0xFF;

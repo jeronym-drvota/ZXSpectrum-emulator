@@ -20,7 +20,8 @@ ZxSpectrum/
     Ula.cs              – render obrazu z 16K obrazové banky do BGRA framebufferu
     Beeper.cs           – 1-bit reproduktor: záznam přepnutí bitu 4, render PCM vzorků + DC blocker
     Ay.cs               – AY-3-8912 (3 tóny, šum, obálka), render vzorků
-    Snapshot.cs         – načítání .sna a .z80 (48K i 128K), detekce modelu
+    Snapshot.cs         – načítání i ukládání .sna a .z80 (48K i 128K), detekce modelu
+    LoadingGif.cs       – uložení obrazovky jako animovaný „nahrávací" GIF (vlastní GIF89a/LZW)
     TzxTape.cs          – páska .tzx/.tap: bloky → pulzy + syrová data, přehrávač EAR
     RzxPlayer.cs        – přehrávání RZX záznamů (snapshot + vstupy po snímcích)
     TestRom.cs          – náhradní testovací ROM, když chybí skutečná
@@ -69,6 +70,10 @@ ZxSpectrum/
 - **F10** – reset stroje
 - **F11** – grafická mapa kláves ZX Spectra (overlay)
 - **F12** – fullscreen (též **Alt+Enter**, **Esc** ven)
+- **Insert** – vložit POKE (cheat: adresa,hodnota; overlay)
+- **Home** – uložit snapshot (.z80) do Dokumenty\snapshots (název hry + datum/čas)
+- **End** – nahrát snapshot (výběrový overlay, šipky + Enter)
+- **PrintScreen** – uložit obrazovku jako „nahrávací" animovaný GIF do Dokumenty\screenshots (akce na KeyUp)
 - **Num + / − / *** – rychleji / pomaleji / 100 %
 - Kempston: **šipky + Space (fire)**
 
@@ -83,6 +88,7 @@ Pozn.: L=LET, K=LIST (správně dle reálného Spectra). Pár E-mode tokenů hor
 - Nepoužité členy mazat (čistota), klávesy držet bez konfliktů.
 
 ## Možná další práce (zatím neuděláno)
+- GIF: volitelná komprese bloků (teď nekomprimované 0xFFFF u .z80; GIF má vlastní LZW).
 - **Nahrávání** RZX (jen přehrávání hotové).
 - SZX snapshoty (RZX i samostatně).
 - ULA contention, floating bus, Issue 2/3 rozdíl EAR — neemulováno.

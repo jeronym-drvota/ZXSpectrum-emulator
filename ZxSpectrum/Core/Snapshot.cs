@@ -106,6 +106,70 @@ namespace ZxSpectrum.Core
             spec.ForcePaging(port);
         }
 
+        // =================== uložení Z80 (verze 2) ===================
+        /// <summary>
+        /// Uloží aktuální stav do .z80 (verze 2, nekomprimované bloky 0xFFFF).
+        /// Funguje pro 48K i 128K; čte se zpět vlastním LoadZ80.
+        /// </summary>
+        public static void SaveZ80(Spectrum spec, string path)
+        {
+            var c = spec.Cpu;
+            var buf = new System.Collections.Generic.List<byte>(64 * 1024);
+
+            // ---- 30bajtová základní hlavička ----
+            buf.Add(c.A); buf.Add(c.F);
+            buf.Add(c.C); buf.Add(c.B);
+            buf.Add(c.L); buf.Add(c.H);
+            buf.Add(0); buf.Add(0);                 // PC = 0 → verze 2/3
+            buf.Add((byte)c.SP); buf.Add((byte)(c.SP >> 8));
+            buf.Add(c.I);
+            buf.Add((byte)(c.R & 0x7F));
+            buf.Add((byte)(((c.R >> 7) & 1) | ((spec.Border & 7) << 1))); // bit0 R7, bity1-3 border
+            buf.Add(c.E); buf.Add(c.D);
+            buf.Add(c.C2); buf.Add(c.B2);
+            buf.Add(c.E2); buf.Add(c.D2);
+            buf.Add(c.L2); buf.Add(c.H2);
+            buf.Add(c.A2); buf.Add(c.F2);
+            buf.Add((byte)c.IY); buf.Add((byte)(c.IY >> 8));
+            buf.Add((byte)c.IX); buf.Add((byte)(c.IX >> 8));
+            buf.Add((byte)(c.IFF1 ? 1 : 0));
+            buf.Add((byte)(c.IFF2 ? 1 : 0));
+            buf.Add((byte)(c.IM & 0x03));
+
+            // ---- rozšířená hlavička verze 2 (délka 23) ----
+            buf.Add(23); buf.Add(0);
+            buf.Add((byte)c.PC); buf.Add((byte)(c.PC >> 8));
+            buf.Add((byte)(spec.Is128 ? 3 : 0)); // hw: 0=48K, 3=128K (pro extraLen 23)
+            buf.Add(spec.Last7FFD);              // poslední zápis na 0x7FFD
+            buf.Add(0);                          // rozhraní / Timex
+            buf.Add(0);                          // příznaky
+            buf.Add((byte)spec.Ay.Selected);     // poslední zápis na 0xFFFD
+            for (int i = 0; i < 16; i++) buf.Add(spec.Ay.ReadReg(i)); // registry AY
+
+            // ---- bloky RAM (nekomprimovaně, len = 0xFFFF) ----
+            if (spec.Is128)
+            {
+                for (int bank = 0; bank < 8; bank++)
+                    WriteBlock(buf, bank + 3, spec.Ram[bank]); // strany 3–10
+            }
+            else
+            {
+                // 48K: strana 8 = bank5 (0x4000), 4 = bank2 (0x8000), 5 = bank0 (0xC000)
+                WriteBlock(buf, 8, spec.Ram[5]);
+                WriteBlock(buf, 4, spec.Ram[2]);
+                WriteBlock(buf, 5, spec.Ram[0]);
+            }
+
+            File.WriteAllBytes(path, buf.ToArray());
+        }
+
+        static void WriteBlock(System.Collections.Generic.List<byte> buf, int page, byte[] data)
+        {
+            buf.Add(0xFF); buf.Add(0xFF);   // nekomprimováno, přesně 16384 B
+            buf.Add((byte)page);
+            buf.AddRange(data);
+        }
+
         // =================== Z80 (v1 / v2 / v3) ===================
         public static void LoadZ80(Spectrum spec, byte[] d)
         {
