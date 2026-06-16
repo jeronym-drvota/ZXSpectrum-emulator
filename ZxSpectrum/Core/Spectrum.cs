@@ -277,6 +277,8 @@ namespace ZxSpectrum.Core
         public void PlayTape() => Tape?.Play(Cpu.TStates);
         public void StopTape() => Tape?.Stop();
         public bool TapePlaying => Tape != null && Tape.Playing;
+        public bool TapeLoading => Tape != null && Tape.Loading;
+        public void SeekTape(int block) => Tape?.SeekTo(block, Cpu.TStates);
 
         // ---------- klávesnice ----------
         public void SetKey(int row, int bit, bool pressed)

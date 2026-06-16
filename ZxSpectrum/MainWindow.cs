@@ -42,6 +42,7 @@ namespace ZxSpectrum
         string webQuery = "";
         string webStatus;       // stavová / chybová hláška
         List<WebGames.Entry> webResults;
+        int webIndex;           // vybraný výsledek (výběr kurzorem)
         static readonly string DownloadDir = Path.Combine(AppContext.BaseDirectory, "downloads");
 
         // snapshoty: ukládání do Dokumenty\snapshots (vždy nový soubor), výběrové nahrávání
@@ -58,6 +59,12 @@ namespace ZxSpectrum
         bool snapMenuActive;
         List<string> snapFiles = new();
         int snapIndex;
+
+        // overlay prohlížeče bloků pásky (Shift+F6)
+        readonly Border tapeOverlay;
+        readonly TextBlock tapeText;
+        bool tapeMenuActive;
+        int tapeIndex;
 
         // vkládání POKE (cheaty) – klávesa Insert
         readonly Border pokeOverlay;
@@ -84,10 +91,11 @@ namespace ZxSpectrum
             "\n" +
             "  F2         model 48K / 128K\n" +
             "  F3         otevřít soubor (.sna .z80 .tzx .tap .rzx)\n" +
-            "  Shift+F3   hledat a spustit hru z webu (ZXDB)\n" +
+            "  Shift+F3   hledat hru z webu (ZXDB + zx-spectrum.cz, výběr šipkami)\n" +
             "  F4         AY zvuk na 48K (Melodik)\n" +
             "  F5         zvuk zap / vyp\n" +
             "  F6         páska: přehrát / zastavit\n" +
+            "  Shift+F6   bloky pásky (skok na blok)\n" +
             "  F7         max rychlost\n" +
             "  F8         rychlé nahrávání\n" +
             "  F9         okamžité nahrávání\n" +
@@ -162,8 +170,15 @@ namespace ZxSpectrum
                 FontSize = 14
             };
             snapOverlay = MakeOverlayBox(snapText);
+            tapeText = new TextBlock
+            {
+                Foreground = Brushes.White,
+                FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+                FontSize = 14
+            };
+            tapeOverlay = MakeOverlayBox(tapeText);
 
-            Content = new Panel { Children = { image, helpOverlay, kbOverlay, romOverlay, webOverlay, pokeOverlay, snapOverlay } };
+            Content = new Panel { Children = { image, helpOverlay, kbOverlay, romOverlay, webOverlay, pokeOverlay, snapOverlay, tapeOverlay } };
             Focusable = true;
 
             timer = new DispatcherTimer(DispatcherPriority.Render)
@@ -433,6 +448,63 @@ namespace ZxSpectrum
             // srovnat časování po skoku stavu
             lastTime = clock.Elapsed.TotalSeconds;
             tStateBudget = 0;
+        }
+
+        // ---------- prohlížeč bloků pásky (Shift+F6) ----------
+        void OpenTapeBrowser()
+        {
+            helpOverlay.IsVisible = kbOverlay.IsVisible = false;
+            ClearKeys();
+            tapeIndex = spectrum.Tape != null
+                ? Math.Min(spectrum.Tape.CurrentBlock, Math.Max(0, spectrum.Tape.BlockCount - 1))
+                : 0;
+            tapeMenuActive = true;
+            tapeOverlay.IsVisible = true;
+            UpdateTapeOverlay();
+        }
+
+        void CloseTapeBrowser()
+        {
+            tapeMenuActive = false;
+            tapeOverlay.IsVisible = false;
+        }
+
+        void UpdateTapeOverlay()
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append("BLOKY PÁSKY   (↑↓ výběr, Enter skok, Esc zavře)\n\n");
+
+            var tape = spectrum.Tape;
+            if (tape == null || tape.BlockCount == 0)
+            {
+                sb.Append("  Není vložena páska – otevři .tap/.tzx přes F3.");
+                tapeText.Text = sb.ToString();
+                return;
+            }
+
+            int count = tape.BlockCount;
+            int now = tape.CurrentBlock;            // kde je teď ukazatel (► = teď hraje/příští)
+            sb.Append($"  ►=aktuální pozice    bloků: {count}\n\n");
+
+            const int window = 16;
+            int from = Math.Max(0, Math.Min(tapeIndex - window / 2, count - window));
+            int to = Math.Min(count, from + window);
+            if (from > 0) sb.Append("       ⋮\n");
+            for (int i = from; i < to; i++)
+            {
+                string mark = i == now ? "►" : " ";          // aktuální pozice pásky
+                string sel = i == tapeIndex ? ">" : " ";      // vybraný řádek
+                sb.Append($"  {sel}{mark} {i + 1,3}. {tape.BlockDesc(i)}\n");
+            }
+            if (to < count) sb.Append("       ⋮");
+            tapeText.Text = sb.ToString();
+        }
+
+        void SeekToSelectedBlock()
+        {
+            if (spectrum.Tape == null || spectrum.Tape.BlockCount == 0) { CloseTapeBrowser(); return; }
+            spectrum.SeekTape(tapeIndex);
+            UpdateTapeOverlay();   // ukazatel ► se přesune na zvolený blok (overlay nechám otevřený)
         }
 
         void LoadRzx(string path)
@@ -729,7 +801,10 @@ namespace ZxSpectrum
                 return;
             }
 
-            bool turbo = unlimited || (fastTape && (spectrum.TapePlaying || AutoActive));
+            // turbo jen když páska SKUTEČNĚ nahrává (TapeLoading), ne jen „běží“ –
+            // jinak by hra po nahrání jela mnohonásobně zrychleně, protože páska
+            // zůstává spuštěná kvůli pokračování dalším levelem.
+            bool turbo = unlimited || (fastTape && (spectrum.TapeLoading || AutoActive));
 
             if (turbo)
             {
@@ -743,7 +818,7 @@ namespace ZxSpectrum
                     RunMachineFrame();
                     frames++;
                 } while (frames < 4000 && sw.ElapsedMilliseconds < 16
-                         && (unlimited || spectrum.TapePlaying || AutoActive));
+                         && (unlimited || spectrum.TapeLoading || AutoActive));
 
                 // po zrychlení nedoháníme „dluh" reálného času
                 lastTime = clock.Elapsed.TotalSeconds;
@@ -965,7 +1040,7 @@ namespace ZxSpectrum
         void UpdateWebOverlay()
         {
             var sb = new System.Text.StringBuilder();
-            sb.Append("HLEDÁNÍ HER NA WEBU – ZXDB   (Esc zavře)\n\n");
+            sb.Append("HLEDÁNÍ HER NA WEBU – ZXDB + zx-spectrum.cz   (Esc zavře)\n\n");
             sb.Append($"  Název: {webQuery}_\n");
 
             if (webBusy)
@@ -974,14 +1049,23 @@ namespace ZxSpectrum
             }
             else if (webResults is { Count: > 0 })
             {
-                sb.Append("\n  Spusť klávesou 0–9   (Backspace = nové hledání)\n\n");
-                for (int i = 0; i < webResults.Count; i++)
+                sb.Append($"\n  ↑↓ výběr, Enter spustí, Backspace nové hledání   ({webResults.Count})\n\n");
+
+                // posuvné okno se zvýrazněnou položkou (jako u snapshotů)
+                const int window = 16;
+                int from = Math.Max(0, Math.Min(webIndex - window / 2, webResults.Count - window));
+                int to = Math.Min(webResults.Count, from + window);
+                if (from > 0) sb.Append("       ⋮\n");
+                for (int i = from; i < to; i++)
                 {
                     var r = webResults[i];
                     string title = r.Title.Length > 34 ? r.Title[..33] + "…" : r.Title;
                     string machine = r.Machine.Replace("ZX-Spectrum ", "");
-                    sb.Append($"  {i}   {title,-36}{r.Year?.ToString() ?? "    "}  {machine}\n");
+                    string src = r.Source == WebGames.Source.ZxSpectrumCz ? "cz" : "DB";
+                    sb.Append(i == webIndex ? "  ► " : "    ");
+                    sb.Append($"[{src}] {title,-36}{r.Year?.ToString() ?? "    "}  {machine}\n");
                 }
+                if (to < webResults.Count) sb.Append("       ⋮");
                 if (webStatus != null) sb.Append($"\n  {webStatus}");
             }
             else
@@ -1002,6 +1086,7 @@ namespace ZxSpectrum
             try
             {
                 webResults = await WebGames.SearchAsync(webQuery.Trim());
+                webIndex = 0;
                 webStatus = null;
             }
             catch (Exception ex)
@@ -1021,7 +1106,7 @@ namespace ZxSpectrum
             UpdateWebOverlay();
             try
             {
-                string path = await WebGames.DownloadAsync(entry.Id, DownloadDir);
+                string path = await WebGames.DownloadAsync(entry, DownloadDir);
                 webBusy = false;
                 if (!webMenuActive) return; // uživatel mezitím zavřel Escapem
                 CloseWebSearch();
@@ -1181,15 +1266,14 @@ namespace ZxSpectrum
                 }
                 else if (!webBusy && webResults is { Count: > 0 })
                 {
-                    int idx = -1;
-                    if (e.Key >= Key.D0 && e.Key <= Key.D9) idx = e.Key - Key.D0;
-                    else if (e.Key >= Key.NumPad0 && e.Key <= Key.NumPad9) idx = e.Key - Key.NumPad0;
-
-                    if (idx >= 0 && idx < webResults.Count)
-                    {
-                        RunWebGame(idx);
-                        e.Handled = true;
-                    }
+                    int last = webResults.Count - 1;
+                    if (e.Key == Key.Up) { if (webIndex > 0) webIndex--; UpdateWebOverlay(); e.Handled = true; }
+                    else if (e.Key == Key.Down) { if (webIndex < last) webIndex++; UpdateWebOverlay(); e.Handled = true; }
+                    else if (e.Key == Key.PageUp) { webIndex = Math.Max(0, webIndex - 15); UpdateWebOverlay(); e.Handled = true; }
+                    else if (e.Key == Key.PageDown) { webIndex = Math.Min(last, webIndex + 15); UpdateWebOverlay(); e.Handled = true; }
+                    else if (e.Key == Key.Home) { webIndex = 0; UpdateWebOverlay(); e.Handled = true; }
+                    else if (e.Key == Key.End) { webIndex = last; UpdateWebOverlay(); e.Handled = true; }
+                    else if (e.Key == Key.Enter) { RunWebGame(webIndex); e.Handled = true; }
                     else if (e.Key == Key.Back) // zpět na zadání názvu
                     {
                         webResults = null;
@@ -1238,6 +1322,18 @@ namespace ZxSpectrum
                 else if (e.Key == Key.Up) { if (snapIndex > 0) snapIndex--; UpdateSnapOverlay(); }
                 else if (e.Key == Key.Down) { if (snapIndex < snapFiles.Count - 1) snapIndex++; UpdateSnapOverlay(); }
                 else if (e.Key == Key.Enter) LoadSelectedSnap();
+                e.Handled = true;
+                return;
+            }
+            if (tapeMenuActive) // prohlížeč bloků pásky
+            {
+                int last = (spectrum.Tape?.BlockCount ?? 0) - 1;
+                if (e.Key == Key.Escape) CloseTapeBrowser();
+                else if (e.Key == Key.Up) { if (tapeIndex > 0) tapeIndex--; UpdateTapeOverlay(); }
+                else if (e.Key == Key.Down) { if (tapeIndex < last) tapeIndex++; UpdateTapeOverlay(); }
+                else if (e.Key == Key.PageUp) { tapeIndex = Math.Max(0, tapeIndex - 10); UpdateTapeOverlay(); }
+                else if (e.Key == Key.PageDown) { tapeIndex = Math.Min(last, tapeIndex + 10); UpdateTapeOverlay(); }
+                else if (e.Key == Key.Enter) SeekToSelectedBlock();
                 e.Handled = true;
                 return;
             }
@@ -1335,9 +1431,10 @@ namespace ZxSpectrum
                 e.Handled = true;
                 return;
             }
-            if (e.Key == Key.F6) // páska: přehrát / zastavit
+            if (e.Key == Key.F6) // páska: přehrát / zastavit; Shift+F6 = prohlížeč bloků
             {
-                ToggleTape();
+                if ((e.KeyModifiers & KeyModifiers.Shift) != 0) OpenTapeBrowser();
+                else ToggleTape();
                 e.Handled = true;
                 return;
             }
