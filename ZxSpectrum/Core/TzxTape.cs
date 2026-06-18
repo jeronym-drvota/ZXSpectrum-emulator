@@ -29,6 +29,7 @@ namespace ZxSpectrum.Core
         {
             public int[] Pulses;   // rozbalené pulzy bloku
             public byte[] Data;    // syrové bajty (flag..checksum), nebo null u nestandardních
+            public string Desc;    // lidský popis bloku (pro prohlížeč pásky)
         }
 
         readonly List<Block> blocks = new();
@@ -36,12 +37,59 @@ namespace ZxSpectrum.Core
         // stav pulzního přehrávače
         int bi;          // index aktuálního bloku
         int pi;          // index pulzu v rámci bloku
-        long endT;       // absolutní T-stav, kdy končí aktuální pulz
+        long tapeT;      // vlastní hodiny pásky (posouvají se jen při nahrávání)
+        long endT;       // konec aktuálního pulzu v hodinách pásky
         bool level;      // aktuální úroveň (false = nízká)
+        long lastEarT;   // T-stav procesoru při posledním čtení EAR
+        int tightRun;    // počet po sobě jdoucích „těsných" čtení EAR
         public bool Playing { get; private set; }
+
+        /// <summary>
+        /// True, jen když páska právě skutečně dodává data (konzumují se pulzy).
+        /// Přepne na false, jakmile zavaděč přestane těsně číst EAR (běží hra,
+        /// pauza mezi bloky). Slouží k zapnutí „turbo" rychlosti jen po dobu
+        /// nahrávání – jinak by hra po nahrání běžela mnohonásobně zrychleně,
+        /// protože páska zůstává „Playing" kvůli pokračování dalším levelem.
+        /// </summary>
+        public bool Loading { get; private set; }
+
+        // Páska má vlastní hodiny (tapeT), které se posouvají JEN když zavaděč
+        // skutečně nahrává. Nahrávání poznáme podle souvislé série těsných čtení
+        // EAR: zavaděč čte EAR v těsné smyčce mnohokrát za sebou (mezery desítky
+        // až stovky T-stavů), kdežto hra ULA port čte jen v krátké dávce (sken
+        // klávesnice = pár půlřádků) a pak dlouho nic (~snímek, 70000 T).
+        //
+        // Mez IdleGap = největší mezera, která se ještě počítá jako „těsné" čtení.
+        // MinTightRun = kolik těsných čtení po sobě musí přijít, než to uznáme za
+        // nahrávání (víc než sken klávesnice), aby dávka kláves při hraní pásku
+        // nerozjela. Bez toho by se páska během hraní přetočila za blok dalšího
+        // levelu (a ten by se nenahrál) a/nebo by hra po nahrání běžela zrychleně,
+        // protože páska zůstává „Playing" kvůli pokračování dalším levelem.
+        const long IdleGap = 10000;
+        const int MinTightRun = 32;
 
         /// <summary>True, pokud další blok ke čtení je standardní (lze instant-load).</summary>
         public bool AtStandardBlock => bi < blocks.Count && blocks[bi].Data != null;
+
+        // ---------- prohlížeč bloků ----------
+        /// <summary>Počet bloků na pásce.</summary>
+        public int BlockCount => blocks.Count;
+
+        /// <summary>Index bloku, kde je teď ukazatel pásky (== BlockCount po dohrání).</summary>
+        public int CurrentBlock => Math.Min(bi, blocks.Count);
+
+        /// <summary>Lidský popis bloku pro výpis.</summary>
+        public string BlockDesc(int i) =>
+            i >= 0 && i < blocks.Count ? (blocks[i].Desc ?? "Blok") : "";
+
+        /// <summary>Přesune ukazatel pásky na zvolený blok (přehrávání i instant-load).</summary>
+        public void SeekTo(int block, long nowT)
+        {
+            if (blocks.Count == 0) return;
+            if (block < 0) block = 0;
+            if (block >= blocks.Count) block = blocks.Count - 1;
+            ArmFrom(block, nowT);   // nastaví bi/pi/endT i hodiny pásky
+        }
 
         public int PulseCount
         {
@@ -70,29 +118,44 @@ namespace ZxSpectrum.Core
             Playing = bi < blocks.Count;
         }
 
-        public void Stop() => Playing = false;
+        public void Stop() { Playing = false; Loading = false; }
 
         void ArmFrom(int block, long nowT)
         {
             bi = block;
             pi = 0;
             level = false;
+            tapeT = 0;
             while (bi < blocks.Count && blocks[bi].Pulses.Length == 0) bi++;
-            if (bi < blocks.Count) endT = nowT + blocks[bi].Pulses[0];
+            if (bi < blocks.Count) endT = blocks[bi].Pulses[0];
+            lastEarT = nowT;
+            tightRun = 0;
+            Loading = false; // teprve souvislé nahrávání to potvrdí
         }
 
-        /// <summary>Úroveň EAR (true = vysoká). Po dohrání zůstává vysoká.</summary>
+        /// <summary>Úroveň EAR (true = vysoká). Po dohrání i při pozastavení zůstává držená.</summary>
         public bool Ear(long nowT)
         {
             if (!Playing) return true;
-            while (nowT >= endT)
+
+            // Posun vlastních hodin pásky jen při souvislém těsném čtení (= nahrávání).
+            // Krátká dávka (sken klávesnice za hraní) ani dlouhá pauza páskou nehnou.
+            long gap = nowT - lastEarT;
+            lastEarT = nowT;
+            tightRun = (gap >= 0 && gap <= IdleGap) ? tightRun + 1 : 0;
+
+            if (tightRun < MinTightRun) { Loading = false; return level; }
+            Loading = true;
+
+            tapeT += gap;
+            while (tapeT >= endT)
             {
                 pi++;
                 if (pi >= blocks[bi].Pulses.Length)
                 {
                     bi++; pi = 0;
                     while (bi < blocks.Count && blocks[bi].Pulses.Length == 0) bi++;
-                    if (bi >= blocks.Count) { Playing = false; return true; }
+                    if (bi >= blocks.Count) { Playing = false; Loading = false; return true; }
                 }
                 level = !level;
                 endT += blocks[bi].Pulses[pi];
@@ -117,19 +180,20 @@ namespace ZxSpectrum.Core
         // ---------- sestavování bloků ----------
         List<int> cur;       // pulzy právě stavěného bloku
         byte[] curData;
+        string curDesc;
 
         void Flush()
         {
             if (cur != null)
             {
-                blocks.Add(new Block { Pulses = cur.ToArray(), Data = curData });
-                cur = null; curData = null;
+                blocks.Add(new Block { Pulses = cur.ToArray(), Data = curData, Desc = curDesc });
+                cur = null; curData = null; curDesc = null;
             }
         }
 
-        void NewBlock(byte[] data) { Flush(); cur = new List<int>(); curData = data; }
+        void NewBlock(byte[] data, string desc) { Flush(); cur = new List<int>(); curData = data; curDesc = desc; }
 
-        void EnsureBlock() { if (cur == null) { cur = new List<int>(); curData = null; } }
+        void EnsureBlock() { if (cur == null) { cur = new List<int>(); curData = null; curDesc = null; } }
 
         void Add(int len) { EnsureBlock(); cur.Add(len); }
         void AddMany(int count, int len) { EnsureBlock(); for (int i = 0; i < count; i++) cur.Add(len); }
@@ -155,12 +219,35 @@ namespace ZxSpectrum.Core
         {
             var raw = new byte[len];
             Array.Copy(d, start, raw, 0, len);
-            NewBlock(raw);
+            NewBlock(raw, StdDesc(raw));
             int pilot = d[start] < 128 ? PilotHeader : PilotData;
             AddMany(pilot, PilotPulse);
             Add(Sync1); Add(Sync2);
             AddData(d, start, len, Bit0, Bit1, 8);
             AddPause(pauseMs);
+        }
+
+        // popis standardního bloku: z hlavičky vytáhne typ a název, jinak „data"
+        static string StdDesc(byte[] raw)
+        {
+            if (raw.Length >= 19 && raw[0] == 0x00) // hlavička
+            {
+                string name = "";
+                for (int k = 2; k < 12 && k < raw.Length; k++)
+                    name += raw[k] >= 32 && raw[k] < 127 ? (char)raw[k] : ' ';
+                name = name.Trim();
+                string typ = raw[1] switch
+                {
+                    0 => "program",
+                    1 => "pole čísel",
+                    2 => "pole znaků",
+                    3 => "kód",
+                    _ => "hlavička"
+                };
+                return name.Length > 0 ? $"Hlavička – {typ} „{name}\"" : $"Hlavička – {typ}";
+            }
+            int payload = raw.Length >= 2 ? raw.Length - 2 : raw.Length; // bez flagu a kontrolního součtu
+            return $"Data ({payload} B)";
         }
 
         // ---------- TAP ----------
@@ -211,7 +298,7 @@ namespace ZxSpectrum.Core
                         int ub = d[i + 12], pause = U16(d, i + 13), len = U24(d, i + 15);
                         i += 18;
                         if (i + len > d.Length) return;
-                        NewBlock(null);
+                        NewBlock(null, $"Turbo data ({len} B)");
                         AddMany(pl, pp); Add(s1); Add(s2);
                         AddData(d, i, len, zero, one, ub == 0 ? 8 : ub);
                         AddPause(pause);
@@ -223,7 +310,7 @@ namespace ZxSpectrum.Core
                         if (i + 4 > d.Length) return;
                         int pulseLen = U16(d, i), num = U16(d, i + 2);
                         i += 4;
-                        NewBlock(null); AddMany(num, pulseLen);
+                        NewBlock(null, "Čistý tón"); AddMany(num, pulseLen);
                         break;
                     }
                     case 0x13: // sekvence pulzů
@@ -231,7 +318,7 @@ namespace ZxSpectrum.Core
                         if (i + 1 > d.Length) return;
                         int num = d[i++];
                         if (i + num * 2 > d.Length) return;
-                        NewBlock(null);
+                        NewBlock(null, "Sekvence pulzů");
                         for (int k = 0; k < num; k++) Add(U16(d, i + k * 2));
                         i += num * 2;
                         break;
@@ -243,7 +330,7 @@ namespace ZxSpectrum.Core
                         int ub = d[i + 4], pause = U16(d, i + 5), len = U24(d, i + 7);
                         i += 10;
                         if (i + len > d.Length) return;
-                        NewBlock(null);
+                        NewBlock(null, $"Čistá data ({len} B)");
                         AddData(d, i, len, zero, one, ub == 0 ? 8 : ub);
                         AddPause(pause);
                         i += len;

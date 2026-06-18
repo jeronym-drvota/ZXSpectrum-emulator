@@ -3,5 +3,7 @@
 ################################################################################
 
 /.vs/ZxSpectrum
-/ZxSpectrum/.vs
+/.vs/ProjectEvaluation
 /ZxSpectrum/bin/Debug/net8.0
+/ZxSpectrum/obj
+/ZxSpectrum/.vs
